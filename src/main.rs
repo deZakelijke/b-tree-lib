@@ -1,3 +1,4 @@
+use b_tree_lib::run;
 fn main() {
-    println!("Hello, world!");
+    let res = run();
 }
