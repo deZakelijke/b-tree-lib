@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 // Perhaps T and V need some traits?
-struct Node<T: PartialOrd, V> {
+struct Node<T: PartialOrd + Clone, V: Clone> {
     keys: Vec<T>,
     values: Vec<V>,
     children: Vec<Rc<RefCell<Node<T, V>>>>,
@@ -10,12 +10,12 @@ struct Node<T: PartialOrd, V> {
 }
 /// BTree
 ///
-pub struct BTree<T: PartialOrd, V> {
+pub struct BTree<T: PartialOrd + Clone, V: Clone> {
     max_keys_per_node: usize,
     root: Rc<RefCell<Node<T, V>>>,
 }
 
-impl<T: PartialOrd, V> BTree<T, V> {
+impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
     pub fn new(first_key: T, first_value: V, max_keys_per_node: usize) -> Self {
         if max_keys_per_node < 4 {
             panic!("max_keys_per_node must be at least 4");
@@ -39,11 +39,17 @@ impl<T: PartialOrd, V> BTree<T, V> {
 
     // Returns an Err when the key already exists
     pub fn insert(&mut self, key: T, value: V) {
-        if self.root.borrow().keys.len() <= self.max_keys_per_node / 2 - 1 {
-            let _ = BTree::insert_key_in_node(&mut self.root, key, value, self.max_keys_per_node);
+        let len = self.root.borrow_mut().keys.len();
+        if len <= self.max_keys_per_node / 2 - 1 {
+            let _ = BTree::insert_key_in_node(
+                self.root.borrow_mut(),
+                key,
+                value,
+                self.max_keys_per_node,
+            );
             return;
         }
-        let _ = BTree::traverse_insert(&mut self.root, key, value, self.max_keys_per_node);
+        let _ = BTree::traverse_insert(self.root.borrow_mut(), key, value, self.max_keys_per_node);
     }
 
     // Returns an Err when the key does not exist
@@ -68,50 +74,75 @@ impl<T: PartialOrd, V> BTree<T, V> {
         };
     }
 
+    /// Traverse over the children of a node to find the node in which to insert
+    ///
+    /// Tries to recursively find the leaf node of the tree in which to insert
+    /// the key-value pair. If the `current_node` is a leaf node, try to insert
+    /// into this node. If the `current_node` has children, loop over keys of
+    /// the node to find the child node to which to recurse.
+    ///
+    /// If the insertion into the current node fails, the error is passed to
+    /// the parent node.
+    /// If the recursive `traverse_insert` call on a child node fails, the
+    /// child node needs to be split into two nodes, both of which become children
+    /// of the `current_node`. If then the `current_node` is full, the
+    /// `traverse_insert` call returns an error to the parent, which then
+    /// recursively splits nodes.
     fn traverse_insert(
-        current_node: &mut Rc<RefCell<Node<T, V>>>,
+        current_node: Rc<RefCell<Node<T, V>>>,
         key: T,
         value: V,
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
-        if current_node.borrow().children.len() == 0 {
+        let borrowed_node = current_node.borrow();
+        let children_len = borrowed_node.children.len();
+        if children_len == 0 {
             // insert key in current node
             let result =
-                BTree::insert_key_in_node(&mut current_node, key, value, max_keys_per_node);
+                BTree::insert_key_in_node(current_node.clone(), key, value, max_keys_per_node);
             match result {
                 Ok(_) => return Ok(()),
-                Err(e) => return Err(e),
+                Err(e) => return Err(e), // Node is full, pass error to parent.
             }
         }
-        for (i, current_key) in current_node.borrow().keys.iter().enumerate() {
+        for (i, current_key) in borrowed_node.keys.iter().enumerate() {
             if key == *current_key {
-                // TODO: define key found error
                 return Err("Key already exists");
             }
             if key < *current_key {
-                let mut child_to_traverse = Rc::clone(&mut current_node.children[i]);
-                let result =
-                    BTree::traverse_insert(&mut child_to_traverse, key, value, max_keys_per_node);
+                let child_to_traverse = Rc::clone(&borrowed_node.children[i]);
+                let result = BTree::traverse_insert(
+                    child_to_traverse,
+                    key.clone(),
+                    value.clone(),
+                    max_keys_per_node,
+                );
+                let child_to_traverse = Rc::clone(&borrowed_node.children[i]);
                 match result {
                     Ok(_) => return Ok(()),
                     Err(e) if e == "Node is full" => BTree::split_node(
-                        Rc::clone(current_node),
-                        &mut child_to_traverse,
-                        key,
-                        value,
+                        current_node.clone(),
+                        child_to_traverse,
+                        key.clone(),
+                        value.clone(),
                         max_keys_per_node,
                     ),
                     Err(e) => return Err(e),
                 };
             }
         }
-        let mut child_to_traverse = Rc::clone(&mut current_node.children[current_node.keys.len()]);
-        BTree::traverse_insert(child_to_traverse, key, value, max_keys_per_node)
+        let child_to_traverse = Rc::clone(&borrowed_node.children[children_len - 1]);
+        BTree::traverse_insert(
+            child_to_traverse,
+            key.clone(),
+            value.clone(),
+            max_keys_per_node,
+        )
     }
 
     fn split_node(
-        current_node: &mut Rc<RefCell<Node<T, V>>>,
-        child_to_split: &mut Rc<Node<T, V>>,
+        current_node: Rc<RefCell<Node<T, V>>>,
+        child_to_split: Rc<RefCell<Node<T, V>>>,
         key: T,
         value: V,
         max_keys_per_node: usize,
@@ -120,44 +151,48 @@ impl<T: PartialOrd, V> BTree<T, V> {
             keys: Vec::new(),
             values: Vec::new(),
             children: Vec::new(),
-            parent: Some(Rc::clone(current_node)),
+            parent: Some(Rc::clone(&current_node)),
         };
+        let mut borrowed_child = child_to_split.borrow_mut();
+        // TODO: insert key and value into the correct node
         for i in max_keys_per_node / 2..max_keys_per_node {
-            new_right_node.keys.push(child_to_split.keys[i]);
-            new_right_node.values.push(child_to_split.values[i]);
+            // TODO: pop instead of remove. This is inefficient.
+            new_right_node.keys.push(borrowed_child.keys.remove(i));
+            new_right_node.values.push(borrowed_child.values.remove(i));
             new_right_node
                 .children
-                .push(Rc::clone(&child_to_split.children[i]));
+                .push(Rc::clone(&borrowed_child.children[i]));
         }
-        child_to_split.keys.truncate(max_keys_per_node / 2);
-        child_to_split.values.truncate(max_keys_per_node / 2);
-        child_to_split.children.truncate(max_keys_per_node / 2);
+        borrowed_child.keys.truncate(max_keys_per_node / 2);
+        borrowed_child.values.truncate(max_keys_per_node / 2);
+        borrowed_child.children.truncate(max_keys_per_node / 2);
 
         Ok(())
     }
 
     fn insert_key_in_node(
-        current_node: &mut Rc<RefCell<Node<T, V>>>,
+        current_node: Rc<RefCell<Node<T, V>>>,
         key: T,
         value: V,
         max_keys_per_node: usize,
-    ) -> Result<&mut Rc<RefCell<Node<T, V>>>, &'static str> {
-        let mut current_node = current_node.borrow_mut();
-        if current_node.keys.len() >= max_keys_per_node {
+    ) -> Result<(), &'static str> {
+        let len = current_node.borrow().keys.len();
+        if len >= max_keys_per_node {
             // Node is full, need to split
             // TODO: define node full error
             Err("Node is full")
         } else {
-            for i in 0..current_node.keys.len() {
-                if key < current_node.keys[i] {
-                    current_node.keys.insert(i, key);
-                    current_node.values.insert(i, value);
-                    return Ok(current_node);
+            let mut borrowed_node = current_node.borrow_mut();
+            for i in 0..len {
+                if key < borrowed_node.keys[i] {
+                    borrowed_node.keys.insert(i, key);
+                    borrowed_node.values.insert(i, value);
+                    return Ok(());
                 }
             }
-            current_node.keys.push(key);
-            current_node.values.push(value);
-            return Ok(current_node);
+            borrowed_node.keys.push(key);
+            borrowed_node.values.push(value);
+            return Ok(());
         }
     }
 
