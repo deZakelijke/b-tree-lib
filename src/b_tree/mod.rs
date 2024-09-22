@@ -41,15 +41,11 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
     pub fn insert(&mut self, key: T, value: V) {
         let len = self.root.borrow_mut().keys.len();
         if len <= self.max_keys_per_node / 2 - 1 {
-            let _ = BTree::insert_key_in_node(
-                self.root.borrow_mut(),
-                key,
-                value,
-                self.max_keys_per_node,
-            );
+            let _ =
+                BTree::insert_key_in_node(self.root.clone(), key, value, self.max_keys_per_node);
             return;
         }
-        let _ = BTree::traverse_insert(self.root.borrow_mut(), key, value, self.max_keys_per_node);
+        let _ = BTree::traverse_insert(self.root.clone(), key, value, self.max_keys_per_node);
     }
 
     // Returns an Err when the key does not exist
@@ -59,18 +55,18 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
 
     pub fn exists(&self, key: T) -> bool {
         // TODO: traverse_search can return an Err
-        let does_exist = self.traverse_search(&self.root, key).unwrap();
+        let does_exist = BTree::traverse_search(self.root.clone(), key);
         match does_exist {
-            Some(_) => return true,
-            None => return false,
+            Ok(..) => return true,
+            Err(..) => return false,
         };
     }
 
-    pub fn get(&self, key: T) -> Option<&V> {
-        let does_exist = self.traverse_search(&self.root, key).unwrap();
+    pub fn get(&self, key: T) -> Option<V> {
+        let does_exist = BTree::traverse_search(self.root.clone(), key);
         match does_exist {
-            Some((_, value)) => return Some(value),
-            None => return None,
+            Ok(value) => return Some(value),
+            Err(..) => return None,
         };
     }
 
@@ -94,9 +90,7 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
         value: V,
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
-        let borrowed_node = current_node.borrow();
-        let children_len = borrowed_node.children.len();
-        if children_len == 0 {
+        if current_node.borrow().children.len() == 0 {
             // insert key in current node
             let result =
                 BTree::insert_key_in_node(current_node.clone(), key, value, max_keys_per_node);
@@ -105,6 +99,7 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
                 Err(e) => return Err(e), // Node is full, pass error to parent.
             }
         }
+        let borrowed_node = current_node.borrow();
         for (i, current_key) in borrowed_node.keys.iter().enumerate() {
             if key == *current_key {
                 return Err("Key already exists");
@@ -118,7 +113,7 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
                     max_keys_per_node,
                 );
                 let child_to_traverse = Rc::clone(&borrowed_node.children[i]);
-                match result {
+                let _ = match result {
                     Ok(_) => return Ok(()),
                     Err(e) if e == "Node is full" => BTree::split_node(
                         current_node.clone(),
@@ -131,7 +126,7 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
                 };
             }
         }
-        let child_to_traverse = Rc::clone(&borrowed_node.children[children_len - 1]);
+        let child_to_traverse = Rc::clone(&borrowed_node.children.last().unwrap());
         BTree::traverse_insert(
             child_to_traverse,
             key.clone(),
@@ -196,44 +191,39 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
         }
     }
 
-    fn traverse_search<'a>(
-        &'a self,
-        current_node: &'a Node<T, V>,
-        key: T,
-    ) -> Result<Option<(&'a Node<T, V>, &'a V)>, ()> {
-        if current_node.children.len() > 0 {
-            self.iterate_over_node_with_children(current_node, key)
+    fn traverse_search(current_node: Rc<RefCell<Node<T, V>>>, key: T) -> Result<V, &'static str> {
+        let borrowed_node = current_node.borrow();
+        if borrowed_node.children.len() > 0 {
+            BTree::iterate_over_node_with_children(current_node.clone(), key)
         } else {
-            self.iterate_over_node_without_children(current_node, key)
+            BTree::iterate_over_node_without_children(current_node.clone(), key)
         }
     }
 
     fn iterate_over_node_with_children<'a>(
-        &'a self,
-        current_node: &'a Node<T, V>,
+        current_node: Rc<RefCell<Node<T, V>>>,
         key: T,
-    ) -> Result<Option<(&'a Node<T, V>, &'a V)>, ()> {
-        for (i, current_key) in current_node.keys.iter().enumerate() {
+    ) -> Result<V, &'static str> {
+        for (i, current_key) in current_node.borrow().keys.iter().enumerate() {
             if key == *current_key {
-                return Ok(Some((current_node, &current_node.values[i])));
+                return Ok(current_node.borrow().values[i].clone());
             }
             if key < *current_key {
-                return self.traverse_search(&current_node.children[i], key);
+                return BTree::traverse_search(Rc::clone(&current_node.borrow().children[i]), key);
             }
         }
-        Err(())
+        return Err("Key not found");
     }
 
     fn iterate_over_node_without_children<'a>(
-        &'a self,
-        current_node: &'a Node<T, V>,
+        current_node: Rc<RefCell<Node<T, V>>>,
         key: T,
-    ) -> Result<Option<(&'a Node<T, V>, &'a V)>, ()> {
-        for (i, current_key) in current_node.keys.iter().enumerate() {
+    ) -> Result<V, &'static str> {
+        for (i, current_key) in current_node.borrow().keys.iter().enumerate() {
             if key == *current_key {
-                return Ok(Some((current_node, &current_node.values[i])));
+                return Ok(current_node.borrow().values[i].clone());
             }
         }
-        return Ok(None);
+        return Err("Key not found");
     }
 }
