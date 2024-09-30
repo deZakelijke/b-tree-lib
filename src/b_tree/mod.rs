@@ -1,7 +1,9 @@
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::rc::Rc;
-// Perhaps T and V need some traits?
-struct Node<T: PartialOrd + Clone, V: Clone> {
+
+#[derive(Debug)]
+struct Node<T: PartialOrd + Clone + Debug, V: Clone + Debug> {
     keys: Vec<T>,
     values: Vec<V>,
     children: Vec<Rc<RefCell<Node<T, V>>>>,
@@ -10,12 +12,13 @@ struct Node<T: PartialOrd + Clone, V: Clone> {
 }
 /// BTree
 ///
-pub struct BTree<T: PartialOrd + Clone, V: Clone> {
+#[derive(Debug)]
+pub struct BTree<T: PartialOrd + Clone + Debug, V: Clone + Debug> {
     max_keys_per_node: usize,
     root: Rc<RefCell<Node<T, V>>>,
 }
 
-impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
+impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
     pub fn new(first_key: T, first_value: V, max_keys_per_node: usize) -> Self {
         if max_keys_per_node < 4 {
             panic!("max_keys_per_node must be at least 4");
@@ -38,14 +41,43 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
     }
 
     // Returns an Err when the key already exists
-    pub fn insert(&mut self, key: T, value: V) {
+    pub fn insert(&mut self, key: T, value: V) -> Result<(), &str> {
         let len = self.root.borrow_mut().keys.len();
         if len <= self.max_keys_per_node / 2 - 1 {
-            let _ =
-                BTree::insert_key_in_node(self.root.clone(), key, value, self.max_keys_per_node);
-            return;
+            return BTree::insert_key_in_node(
+                self.root.clone(),
+                key,
+                value,
+                self.max_keys_per_node,
+            );
         }
-        let _ = BTree::traverse_insert(self.root.clone(), key, value, self.max_keys_per_node);
+        let result = BTree::traverse_insert(
+            self.root.clone(),
+            key.clone(),
+            value.clone(),
+            self.max_keys_per_node,
+        );
+        match result {
+            Ok(_) => return Ok(()),
+            Err(e) if e == "Node is full" => {
+                println!("Root node is full, splitting");
+                let result = BTree::split_node(None, self.root.clone(), self.max_keys_per_node);
+                match result {
+                    Ok((spare_key, spare_value)) => {
+                        let new_root = Rc::new(RefCell::new(Node {
+                            keys: vec![spare_key],
+                            values: vec![spare_value],
+                            children: vec![Rc::clone(&self.root)],
+                            parent: None,
+                        }));
+                        self.root = new_root;
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // Returns an Err when the key does not exist
@@ -90,6 +122,7 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
         value: V,
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
+        println!("Traversing node: {current_node:?}");
         if current_node.borrow().children.len() == 0 {
             // insert key in current node
             let result =
@@ -115,13 +148,24 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
                 let child_to_traverse = Rc::clone(&borrowed_node.children[i]);
                 let _ = match result {
                     Ok(_) => return Ok(()),
-                    Err(e) if e == "Node is full" => BTree::split_node(
-                        current_node.clone(),
-                        child_to_traverse,
-                        key.clone(),
-                        value.clone(),
-                        max_keys_per_node,
-                    ),
+                    Err(e) if e == "Node is full" => {
+                        let result = BTree::split_node(
+                            Some(current_node.clone()),
+                            child_to_traverse,
+                            max_keys_per_node,
+                        );
+                        match result {
+                            Ok((spare_key, spare_value)) => {
+                                return BTree::insert_key_in_node(
+                                    current_node.clone(),
+                                    spare_key,
+                                    spare_value,
+                                    max_keys_per_node,
+                                );
+                            }
+                            Err(e) => return Err(e),
+                        };
+                    }
                     Err(e) => return Err(e),
                 };
             }
@@ -134,35 +178,50 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
             max_keys_per_node,
         )
     }
+    fn assign_new_root(&mut self) {}
 
     fn split_node(
-        current_node: Rc<RefCell<Node<T, V>>>,
+        current_node: Option<Rc<RefCell<Node<T, V>>>>,
         child_to_split: Rc<RefCell<Node<T, V>>>,
-        key: T,
-        value: V,
         max_keys_per_node: usize,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(T, V), &'static str> {
+        let mut parent = None;
+        if let Some(node) = current_node {
+            parent = Some(Rc::clone(&node));
+        }
+
         let mut new_right_node = Node {
             keys: Vec::new(),
             values: Vec::new(),
             children: Vec::new(),
-            parent: Some(Rc::clone(&current_node)),
+            parent,
         };
+        println!("New node created: {new_right_node:?}");
         let mut borrowed_child = child_to_split.borrow_mut();
+        println!("Borrowed child keys: {0:?}", borrowed_child.keys);
         // TODO: insert key and value into the correct node
         for i in max_keys_per_node / 2..max_keys_per_node {
             // TODO: pop instead of remove. This is inefficient.
-            new_right_node.keys.push(borrowed_child.keys.remove(i));
-            new_right_node.values.push(borrowed_child.values.remove(i));
+            println!("Moving key and value with index {i}");
             new_right_node
-                .children
-                .push(Rc::clone(&borrowed_child.children[i]));
+                .keys
+                .push(borrowed_child.keys.remove(max_keys_per_node / 2 + 1));
+            new_right_node
+                .values
+                .push(borrowed_child.values.remove(max_keys_per_node / 2 + 1));
+            if borrowed_child.children.len() > i {
+                new_right_node.children.push(Rc::clone(
+                    &borrowed_child.children[max_keys_per_node / 2 + 1],
+                ));
+            }
         }
+        let spare_key = borrowed_child.keys.remove(max_keys_per_node / 2);
+        let spare_value = borrowed_child.values.remove(max_keys_per_node / 2);
         borrowed_child.keys.truncate(max_keys_per_node / 2);
         borrowed_child.values.truncate(max_keys_per_node / 2);
         borrowed_child.children.truncate(max_keys_per_node / 2);
 
-        Ok(())
+        Ok((spare_key, spare_value))
     }
 
     fn insert_key_in_node(
@@ -172,23 +231,23 @@ impl<T: PartialOrd + Clone, V: Clone> BTree<T, V> {
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
         let len = current_node.borrow().keys.len();
-        if len >= max_keys_per_node {
-            // Node is full, need to split
-            // TODO: define node full error
-            Err("Node is full")
-        } else {
-            let mut borrowed_node = current_node.borrow_mut();
-            for i in 0..len {
-                if key < borrowed_node.keys[i] {
-                    borrowed_node.keys.insert(i, key);
-                    borrowed_node.values.insert(i, value);
-                    return Ok(());
-                }
+        let mut borrowed_node = current_node.borrow_mut();
+        for i in 0..len {
+            if key < borrowed_node.keys[i] {
+                borrowed_node.keys.insert(i, key);
+                borrowed_node.values.insert(i, value);
+                return Ok(());
             }
-            borrowed_node.keys.push(key);
-            borrowed_node.values.push(value);
-            return Ok(());
         }
+        borrowed_node.keys.push(key);
+        borrowed_node.values.push(value);
+
+        let len = borrowed_node.keys.len();
+        if len >= max_keys_per_node + 1 {
+            // TODO: define node full error
+            return Err("Node is full");
+        }
+        return Ok(());
     }
 
     fn traverse_search(current_node: Rc<RefCell<Node<T, V>>>, key: T) -> Result<V, &'static str> {
