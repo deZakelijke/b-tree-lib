@@ -55,7 +55,7 @@ where
     // Returns an Err when the key already exists
     pub fn insert(&mut self, key: T, value: V) -> Result<(), &str> {
         let root_len = self.root.borrow_mut().keys.len();
-        if root_len < self.max_keys_per_node {
+        if root_len < self.max_keys_per_node && self.root.borrow().children.len() == 0 {
             return BTree::insert_key_in_node(
                 self.root.clone(),
                 key,
@@ -129,7 +129,7 @@ where
         value: V,
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
-        println!("Traversing node: {current_node:?}");
+        println!("Traversing node: {current_node:#?}");
         if current_node.borrow().children.len() == 0 {
             // insert key in current node
             let result =
@@ -219,7 +219,6 @@ where
             parent: Some(Rc::clone(&parent)),
         };
         // TODO: set parent of child_to_split
-        println!("New node created: {new_right_node:?}");
         let spare_key;
         let spare_value;
         {
@@ -339,7 +338,10 @@ where
                 return BTree::traverse_search(Rc::clone(&current_node.borrow().children[i]), key);
             }
         }
-        return Err("Key not found");
+        return BTree::traverse_search(
+            Rc::clone(&current_node.borrow().children[current_node.borrow().children.len() - 1]),
+            key,
+        );
     }
 
     fn iterate_over_node_without_children<'a>(
