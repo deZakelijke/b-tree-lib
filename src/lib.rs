@@ -10,11 +10,11 @@ pub fn run() -> Result<(), ()> {
     for i in 1..5 {
         let val = i * 5;
         let result = b_tree.insert(i, val);
-        println!("Key {i} inserted {val}: {result:?}");
+        println!("Key {i} inserted with val {val}: {result:?}\n");
     }
     for i in 0..5 {
         let exists = b_tree.exists(i);
-        println!("Key {i} exists: {exists}");
+        println!("Does key {i} exists: {exists}\n");
     }
     println!("BTree: {b_tree:#?}");
     // for i in 0..4 {

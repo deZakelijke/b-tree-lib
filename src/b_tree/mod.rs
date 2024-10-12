@@ -1,9 +1,13 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::fmt::Debug;
 use std::rc::Rc;
 
 #[derive(Debug)]
-struct Node<T: PartialOrd + Clone + Debug, V: Clone + Debug> {
+struct Node<T, V>
+where
+    T: PartialOrd + Clone + Debug,
+    V: Clone + Debug,
+{
     keys: Vec<T>,
     values: Vec<V>,
     children: Vec<Rc<RefCell<Node<T, V>>>>,
@@ -13,12 +17,20 @@ struct Node<T: PartialOrd + Clone + Debug, V: Clone + Debug> {
 /// BTree
 ///
 #[derive(Debug)]
-pub struct BTree<T: PartialOrd + Clone + Debug, V: Clone + Debug> {
+pub struct BTree<T, V>
+where
+    T: PartialOrd + Clone + Debug,
+    V: Clone + Debug,
+{
     max_keys_per_node: usize,
     root: Rc<RefCell<Node<T, V>>>,
 }
 
-impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
+impl<T, V> BTree<T, V>
+where
+    T: PartialOrd + Clone + Debug,
+    V: Clone + Debug,
+{
     pub fn new(first_key: T, first_value: V, max_keys_per_node: usize) -> Self {
         if max_keys_per_node < 4 {
             panic!("max_keys_per_node must be at least 4");
@@ -42,8 +54,8 @@ impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
 
     // Returns an Err when the key already exists
     pub fn insert(&mut self, key: T, value: V) -> Result<(), &str> {
-        let len = self.root.borrow_mut().keys.len();
-        if len <= self.max_keys_per_node / 2 - 1 {
+        let root_len = self.root.borrow_mut().keys.len();
+        if root_len < self.max_keys_per_node {
             return BTree::insert_key_in_node(
                 self.root.clone(),
                 key,
@@ -60,17 +72,12 @@ impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
         match result {
             Ok(_) => return Ok(()),
             Err(e) if e == "Node is full" => {
+                // NOTE: why do we know this is the root? Should it be 'Node is full'?
                 println!("Root node is full, splitting");
                 let result = BTree::split_node(None, self.root.clone(), self.max_keys_per_node);
                 match result {
-                    Ok((spare_key, spare_value)) => {
-                        let new_root = Rc::new(RefCell::new(Node {
-                            keys: vec![spare_key],
-                            values: vec![spare_value],
-                            children: vec![Rc::clone(&self.root)],
-                            parent: None,
-                        }));
-                        self.root = new_root;
+                    Ok(node) => {
+                        self.root = node;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -155,13 +162,8 @@ impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
                             max_keys_per_node,
                         );
                         match result {
-                            Ok((spare_key, spare_value)) => {
-                                return BTree::insert_key_in_node(
-                                    current_node.clone(),
-                                    spare_key,
-                                    spare_value,
-                                    max_keys_per_node,
-                                );
+                            Ok(_) => {
+                                return Ok(());
                             }
                             Err(e) => return Err(e),
                         };
@@ -178,52 +180,118 @@ impl<T: PartialOrd + Clone + Debug, V: Clone + Debug> BTree<T, V> {
             max_keys_per_node,
         )
     }
-    fn assign_new_root(&mut self) {}
 
     fn split_node(
         current_node: Option<Rc<RefCell<Node<T, V>>>>,
         child_to_split: Rc<RefCell<Node<T, V>>>,
         max_keys_per_node: usize,
-    ) -> Result<(T, V), &'static str> {
-        let mut parent = None;
-        if let Some(node) = current_node {
-            parent = Some(Rc::clone(&node));
+    ) -> Result<Rc<RefCell<Node<T, V>>>, &'static str> {
+        // If we split a node, do we always create two nodes?
+        // When we split the root, we need to create a new root node and split the old root node.
+        //
+        // We do need to create a new parent when we split the root. Return the parent?
+        // If the `current_node` is not None, we insert the remainder values in it.
+        // Connecting the new children to the parent requres some logic
+        //
+        // The step of inserting into the parent, if it already existed, could require a recursive
+        // call to `split_node`.
+        //
+        // The tree only gets taller when we split the root!
+        let parent;
+        match current_node {
+            Some(node) => {
+                parent = Rc::clone(&node);
+            }
+            None => {
+                parent = Rc::new(RefCell::new(Node {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                    children: Vec::new(),
+                    parent: None,
+                }));
+            }
         }
 
         let mut new_right_node = Node {
             keys: Vec::new(),
             values: Vec::new(),
             children: Vec::new(),
-            parent,
+            parent: Some(Rc::clone(&parent)),
         };
+        // TODO: set parent of child_to_split
         println!("New node created: {new_right_node:?}");
-        let mut borrowed_child = child_to_split.borrow_mut();
-        println!("Borrowed child keys: {0:?}", borrowed_child.keys);
-        // TODO: insert key and value into the correct node
-        for i in max_keys_per_node / 2..max_keys_per_node {
-            // TODO: pop instead of remove. This is inefficient.
-            println!("Moving key and value with index {i}");
-            new_right_node
-                .keys
-                .push(borrowed_child.keys.remove(max_keys_per_node / 2 + 1));
-            new_right_node
-                .values
-                .push(borrowed_child.values.remove(max_keys_per_node / 2 + 1));
-            if borrowed_child.children.len() > i {
-                new_right_node.children.push(Rc::clone(
-                    &borrowed_child.children[max_keys_per_node / 2 + 1],
-                ));
+        let spare_key;
+        let spare_value;
+        {
+            let mut borrowed_child = child_to_split.borrow_mut();
+            println!("Borrowed child keys: {0:?}", borrowed_child.keys);
+            // TODO: insert key and value into the correct node
+            for i in max_keys_per_node / 2 + 1..max_keys_per_node + 1 {
+                // TODO: pop instead of remove. This is inefficient.
+                println!("Moving key and value with index {i} to new right node");
+                new_right_node
+                    .keys
+                    .push(borrowed_child.keys.remove(max_keys_per_node / 2 + 1));
+                new_right_node
+                    .values
+                    .push(borrowed_child.values.remove(max_keys_per_node / 2 + 1));
+                if borrowed_child.children.len() > i {
+                    new_right_node.children.push(Rc::clone(
+                        &borrowed_child.children[max_keys_per_node / 2 + 1],
+                    ));
+                }
+            }
+            spare_key = borrowed_child.keys.remove(max_keys_per_node / 2);
+            spare_value = borrowed_child.values.remove(max_keys_per_node / 2);
+            println!("Spare key: {spare_key:?}, Spare value: {spare_value:?}");
+            borrowed_child.keys.truncate(max_keys_per_node / 2);
+            borrowed_child.values.truncate(max_keys_per_node / 2);
+            borrowed_child.children.truncate(max_keys_per_node / 2);
+        }
+
+        let result = BTree::insert_key_in_node(
+            Rc::clone(&parent),
+            spare_key.clone(),
+            spare_value.clone(),
+            max_keys_per_node,
+        );
+        BTree::connect_children_to_parent(
+            parent.borrow_mut(),
+            Rc::clone(&child_to_split),
+            Rc::new(RefCell::new(new_right_node)),
+        );
+        match result {
+            Ok(_) => return Ok(parent),
+            Err(e) if e == "Node is full" => {
+                let parent_ref = parent.borrow_mut();
+                return BTree::split_node(
+                    parent_ref.parent.clone(),
+                    Rc::clone(&parent),
+                    max_keys_per_node,
+                );
+            }
+            Err(_) => panic!("Invalid state?"),
+        }
+    }
+    fn connect_children_to_parent(
+        mut parent: RefMut<Node<T, V>>,
+        left_child: Rc<RefCell<Node<T, V>>>,
+        right_child: Rc<RefCell<Node<T, V>>>,
+    ) {
+        // NOTE: can we assume both left and right have keys? I think so
+        let right_child_min_key = &right_child.borrow().keys[0];
+        let left_child_keys = &left_child.borrow().keys;
+        let left_child_max_key = &left_child_keys[left_child_keys.len() - 1];
+        let keys = parent.keys.clone();
+        for (idx, key) in keys.iter().enumerate() {
+            if left_child_max_key < key && key < right_child_min_key {
+                parent.children.insert(idx, Rc::clone(&left_child));
+                parent.children.insert(idx + 1, Rc::clone(&right_child));
             }
         }
-        let spare_key = borrowed_child.keys.remove(max_keys_per_node / 2);
-        let spare_value = borrowed_child.values.remove(max_keys_per_node / 2);
-        borrowed_child.keys.truncate(max_keys_per_node / 2);
-        borrowed_child.values.truncate(max_keys_per_node / 2);
-        borrowed_child.children.truncate(max_keys_per_node / 2);
-
-        Ok((spare_key, spare_value))
     }
 
+    // NOTE: move to Node module?
     fn insert_key_in_node(
         current_node: Rc<RefCell<Node<T, V>>>,
         key: T,
