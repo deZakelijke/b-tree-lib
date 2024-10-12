@@ -1,8 +1,8 @@
 use std::cell::{RefCell, RefMut};
+use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-#[derive(Debug)]
 struct Node<T, V>
 where
     T: PartialOrd + Clone + Debug,
@@ -352,5 +352,33 @@ where
             }
         }
         return Err("Key not found");
+    }
+}
+
+impl<T, V> fmt::Display for Node<T, V>
+where
+    T: PartialOrd + Clone + Debug,
+    V: Clone + Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // TODO: implement Display for Node
+        write!(f, "Node")
+    }
+}
+impl<T, V> fmt::Debug for Node<T, V>
+where
+    T: PartialOrd + Clone + Debug,
+    V: Clone + Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let parent = match &self.parent {
+            Some(_) => Some(()),
+            None => None,
+        };
+        write!(
+            f,
+            "Node {{\nkeys: {0:#?},\nvalues: {1:#?},\nchildren: {2:#?},\nparent: {3:?}\n}}",
+            self.keys, self.values, self.children, parent
+        )
     }
 }
