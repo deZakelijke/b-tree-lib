@@ -7,7 +7,7 @@ pub fn run() -> Result<(), ()> {
     let max_keys_per_node = 4;
     let mut b_tree = BTree::new(first_key, first_value, max_keys_per_node);
 
-    let total_keys = 8;
+    let total_keys = 17;
     for i in 1..total_keys {
         let val = i * 5;
         let result = b_tree.insert(i, val);

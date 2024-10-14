@@ -33,9 +33,11 @@ where
 {
     pub fn new(first_key: T, first_value: V, max_keys_per_node: usize) -> Self {
         if max_keys_per_node < 4 {
+            // TODO: change to error
             panic!("max_keys_per_node must be at least 4");
         }
         if max_keys_per_node % 2 != 0 {
+            // TODO: change to error
             panic!("max_keys_per_node must be an even number");
         }
         let root = Rc::new(RefCell::new(Node {
@@ -54,6 +56,7 @@ where
 
     // Returns an Err when the key already exists
     pub fn insert(&mut self, key: T, value: V) -> Result<(), &str> {
+        println!("Insertking key: {key:?}, value: {value:?}");
         let root_len = self.root.borrow_mut().keys.len();
         if root_len < self.max_keys_per_node && self.root.borrow().children.len() == 0 {
             let borrowed_root = self.root.borrow_mut();
@@ -66,10 +69,14 @@ where
             self.max_keys_per_node,
         );
         match result {
-            Ok(_) => return Ok(()),
+            Ok(node) => {
+                self.root = node;
+                return Ok(());
+            }
             Err(e) if e == "Node is full" => {
                 // NOTE: why do we know this is the root? Should it be 'Node is full'?
                 println!("Root node is full, splitting");
+                // FIXME: this is not called when splitting the root later.
                 let result = BTree::split_node(self.root.clone(), self.max_keys_per_node);
                 match result {
                     Ok(node) => {
@@ -124,7 +131,7 @@ where
         key: T,
         value: V,
         max_keys_per_node: usize,
-    ) -> Result<(), &'static str> {
+    ) -> Result<Rc<RefCell<Node<T, V>>>, &'static str> {
         println!("Traversing node: {current_node:#?}");
 
         // Only insert key in current node if it is a leaf node
@@ -135,7 +142,7 @@ where
                 let result =
                     BTree::insert_key_in_node(borrowed_node, key, value, max_keys_per_node);
                 match result {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => return Ok(current_node),
                     // TODO: split child?
                     Err(e) => {
                         println!("Inserted key but node is full");
@@ -150,6 +157,7 @@ where
         };
 
         for (i, current_key) in keys.iter().enumerate() {
+            println!("Iterating key: {current_key:?}");
             if key == *current_key {
                 return Err("Key already exists");
             }
@@ -169,16 +177,16 @@ where
                     Rc::clone(&borrowed_node.children[i])
                 };
                 match result {
-                    Ok(_) => {
+                    Ok(node) => {
                         println!("Inserted key in child node, Ok");
-                        return Ok(());
+                        return Ok(node);
                     }
                     Err(e) if e == "Node is full" => {
                         println!("Inserted key in child node, Node is full, splitting");
                         let result = BTree::split_node(child_to_traverse, max_keys_per_node);
                         match result {
-                            Ok(_) => {
-                                return Ok(());
+                            Ok(node) => {
+                                return Ok(node);
                             }
                             // Or should we split the child here?
                             Err(e) => return Err(e),
@@ -208,16 +216,16 @@ where
             Rc::clone(&borrowed_node.children.last().unwrap())
         };
         match result {
-            Ok(_) => {
+            Ok(node) => {
                 println!("Inserted key in child node, Ok");
-                return Ok(());
+                return Ok(node);
             }
             Err(e) if e == "Node is full" => {
-                println!("Inserted key in child node, Node is full, splitting");
+                println!("Inserted key in child node after loop, Node is full, splitting");
                 let result = BTree::split_node(child_to_traverse, max_keys_per_node);
                 match result {
-                    Ok(_) => {
-                        return Ok(());
+                    Ok(node) => {
+                        return Ok(node);
                     }
                     // Or should we split the child here?
                     Err(e) => return Err(e),
@@ -276,6 +284,10 @@ where
             let mut borrowed_child = child_to_split.borrow_mut();
             borrowed_child.parent = Some(Rc::clone(&parent));
             println!("Borrowed child keys: {0:?}", borrowed_child.keys);
+            println!(
+                "Borrowed child children: {0:?}",
+                borrowed_child.children.len()
+            );
             // TODO: insert key and value into the correct node
             for i in max_keys_per_node / 2 + 1..max_keys_per_node + 1 {
                 // TODO: pop instead of remove. This is inefficient.
@@ -286,18 +298,34 @@ where
                 new_right_node
                     .values
                     .push(borrowed_child.values.remove(max_keys_per_node / 2 + 1));
-                if borrowed_child.children.len() > i {
-                    new_right_node.children.push(Rc::clone(
-                        &borrowed_child.children[max_keys_per_node / 2 + 1],
-                    ));
+                if borrowed_child.children.len() > max_keys_per_node / 2 {
+                    // if borrowed_child.children.len() > 0 ?? {
+                    println!("Moving child with index {i} to new right node");
+                    new_right_node
+                        .children
+                        .push(Rc::clone(&borrowed_child.children[i]));
+                    // TODO: needs to be called +1 times since the children vec is longer than
+                    // the keys vec.
                 }
+            }
+            if borrowed_child.children.len() > max_keys_per_node / 2 {
+                // if borrowed_child.children.len() > 0 ?? {
+                println!("Moving child with index -1 to new right node");
+                new_right_node
+                    .children
+                    .push(Rc::clone(&borrowed_child.children.last().unwrap()));
+                // TODO: needs to be called +1 times since the children vec is longer than
+                // the keys vec.
             }
             spare_key = borrowed_child.keys.remove(max_keys_per_node / 2);
             spare_value = borrowed_child.values.remove(max_keys_per_node / 2);
             println!("Spare key: {spare_key:?}, Spare value: {spare_value:?}");
-            borrowed_child.keys.truncate(max_keys_per_node / 2);
-            borrowed_child.values.truncate(max_keys_per_node / 2);
-            borrowed_child.children.truncate(max_keys_per_node / 2);
+            // FIXME: Should be a different value, truncating too many children
+            // The +2 is a temporary fix
+            let truncate_size = borrowed_child.keys.len() / 2;
+            // borrowed_child.keys.truncate(truncate_size);
+            // borrowed_child.values.truncate(truncate_size);
+            borrowed_child.children.truncate(truncate_size + 2);
             println!("Borrowed (left) child keys: {0:?}", borrowed_child.keys);
             println!("New right node keys: {0:?}", new_right_node.keys);
         }
@@ -335,6 +363,7 @@ where
         match result {
             Ok(_) => return Ok(parent),
             Err(e) if e == "Node is full" => {
+                println!("Parent node is also full, splitting");
                 return BTree::split_node(Rc::clone(&parent), max_keys_per_node);
             }
             Err(_) => panic!("Invalid state?"),
