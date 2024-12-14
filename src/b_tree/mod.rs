@@ -139,13 +139,14 @@ where
             let borrowed_node = current_node.borrow_mut();
             if borrowed_node.children.len() == 0 {
                 // insert key in current node
+                println!("Inserting key in leaf node");
                 let result =
                     BTree::insert_key_in_node(borrowed_node, key, value, max_keys_per_node);
                 match result {
                     Ok(_) => return Ok(current_node),
                     // TODO: split child?
                     Err(e) => {
-                        println!("Inserted key but node is full");
+                        println!("Inserting key gave error: {e}");
                         return Err(e);
                     } // Node is full, pass error to parent or split child.
                 }
@@ -178,7 +179,7 @@ where
                 };
                 match result {
                     Ok(node) => {
-                        println!("Inserted key in child node, Ok");
+                        println!("Inserted key in child node, Ok. Returning {node:#?}");
                         return Ok(node);
                     }
                     Err(e) if e == "Node is full" => {
@@ -217,7 +218,7 @@ where
         };
         match result {
             Ok(node) => {
-                println!("Inserted key in child node, Ok");
+                println!("Inserted key in child node, Ok. Returning {node:#?}");
                 return Ok(node);
             }
             Err(e) if e == "Node is full" => {
@@ -240,6 +241,19 @@ where
         }
     }
 
+    /// Split a node into two nodes if it has too many keys
+    ///
+    /// Split the `child_to_split` node into two nodes. The keys and values are
+    /// split in half, with the middle key and value being moved to the parent node.
+    /// A new node is created with the right half of the keys and values, and the
+    /// right half of the children. The parent node is updated to include the new
+    /// right node, and the parent node is returned.
+    /// If the parent node goes over the maximum number of keys, the parent node is
+    /// split as well recursively.
+    ///
+    /// If the `child_to_split` is the root node, a new root node is created and
+    /// the old root node is split into two nodes. The new root node is connected
+    /// to the two new nodes and returned.
     fn split_node(
         child_to_split: Rc<RefCell<Node<T, V>>>,
         max_keys_per_node: usize,
@@ -299,7 +313,7 @@ where
                     .values
                     .push(borrowed_child.values.remove(max_keys_per_node / 2 + 1));
                 if borrowed_child.children.len() > max_keys_per_node / 2 {
-                    // if borrowed_child.children.len() > 0 ?? {
+                    // if borrowed_child.children.len() > 0 ??
                     println!("Moving child with index {i} to new right node");
                     new_right_node
                         .children
@@ -309,7 +323,7 @@ where
                 }
             }
             if borrowed_child.children.len() > max_keys_per_node / 2 {
-                // if borrowed_child.children.len() > 0 ?? {
+                // if borrowed_child.children.len() > 0 ??
                 println!("Moving child with index -1 to new right node");
                 new_right_node
                     .children
@@ -369,6 +383,7 @@ where
             Err(_) => panic!("Invalid state?"),
         }
     }
+
     fn connect_children_to_parent(
         mut parent: RefMut<Node<T, V>>,
         left_child: Option<Rc<RefCell<Node<T, V>>>>,
@@ -405,13 +420,20 @@ where
         }
     }
 
-    // NOTE: move to Node module?
+    /// Insert key and value into the node
+    ///
+    /// Iterate over th existing keys in the node to find the correct position. If the
+    /// key is already present, don't insert it and return an error. If the key is not
+    /// present, insert it in the correct position.
+    /// If the node would go over the maximum number of keys, do insert it but return
+    /// an error.
     fn insert_key_in_node(
         mut current_node: RefMut<Node<T, V>>,
         key: T,
         value: V,
         max_keys_per_node: usize,
     ) -> Result<(), &'static str> {
+        // NOTE: move to Node module?
         let len = current_node.keys.len();
         for i in 0..len {
             if key == current_node.keys[i] {
