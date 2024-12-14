@@ -414,6 +414,9 @@ where
     ) -> Result<(), &'static str> {
         let len = current_node.keys.len();
         for i in 0..len {
+            if key == current_node.keys[i] {
+                return Err("Key already exists");
+            }
             if key < current_node.keys[i] {
                 current_node.keys.insert(i, key);
                 current_node.values.insert(i, value);
