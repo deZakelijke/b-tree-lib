@@ -420,6 +420,10 @@ where
             if key < current_node.keys[i] {
                 current_node.keys.insert(i, key);
                 current_node.values.insert(i, value);
+                let len = current_node.keys.len();
+                if len >= max_keys_per_node + 1 {
+                    return Err("Node is full");
+                }
                 return Ok(());
             }
         }
